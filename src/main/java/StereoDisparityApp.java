@@ -2,6 +2,7 @@ import boofcv.abst.disparity.ConfigSpeckleFilter;
 import boofcv.abst.disparity.DisparitySmoother;
 import boofcv.abst.disparity.StereoDisparity;
 import boofcv.alg.distort.ImageDistort;
+import boofcv.alg.filter.misc.AverageDownSampleOps;
 import boofcv.alg.geo.PerspectiveOps;
 import boofcv.alg.geo.RectifyDistortImageOps;
 import boofcv.alg.geo.RectifyImageOps;
@@ -47,6 +48,9 @@ public class StereoDisparityApp {
     @Option(name = "-o", aliases = {"--Output"}, usage = "Path to output directory")
     public String pathOutput;
 
+    @Option(name = "--MaxWidth", usage = "If an image has a width larger than this it will be scaled")
+    public int maxWidth = 640;
+
     public int regionSize = 5;
     public int disparityMin = 0;
     public int disparityRange = 255;
@@ -56,15 +60,24 @@ public class StereoDisparityApp {
         if (!dirOutput.exists())
             BoofMiscOps.checkTrue(dirOutput.mkdirs());
 
-        List<String> inputsLeft = UtilIO.listSmartImages(pathLeft, true);
-        List<String> inputsRight = UtilIO.listSmartImages(pathRight, true);
+        List<String> inputsLeft = UtilIO.listSmart(pathLeft, true, (f)->true);
+        List<String> inputsRight = UtilIO.listSmart(pathRight, true, (f)->true);
 
         if (inputsLeft.size() != inputsRight.size())
             throw new RuntimeException(String.format("Number of left=%d and right=%d images do not match.",
                     inputsLeft.size(), inputsRight.size()));
 
-        StereoParameters calibration = CalibrationIO.load(pathCalibration);
+        if (inputsLeft.isEmpty()) {
+            System.err.println("No input images found. Check the path?");
+            System.exit(2);
+        }
 
+        StereoParameters calibration = CalibrationIO.load(pathCalibration);
+        StereoParameters scaledCalibration = new StereoParameters(calibration);
+
+        // Storage for scaled images
+        var scaledLeft = new GrayU8(1, 1);
+        var scaledRight = new GrayU8(1, 1);
         // storage for rectified images
         var rectLeft = new GrayU8(1, 1);
         var rectRight = new GrayU8(1, 1);
@@ -79,9 +92,24 @@ public class StereoDisparityApp {
                 continue;
             }
             String name = FilenameUtils.getBaseName(inputsLeft.get(imageIdx));
-            System.out.printf("%-30s %dx%d\n", name, left.width, left.height);
 
-            rectify(left, right, calibration, rectLeft, rectRight);
+            scaledCalibration.setTo(calibration);
+            if (left.width > maxWidth) {
+                double scale = maxWidth/(double)left.width;
+                scaledLeft.reshape(maxWidth, left.height*maxWidth/left.width);
+                AverageDownSampleOps.down(left, scaledLeft);
+                scaledRight.reshape(maxWidth, right.height*maxWidth/right.width);
+                AverageDownSampleOps.down(right, scaledRight);
+                PerspectiveOps.scaleIntrinsic(scaledCalibration.left, scale);
+                PerspectiveOps.scaleIntrinsic(scaledCalibration.right, scale);
+            } else {
+                scaledLeft.setTo(left);
+                scaledRight.setTo(right);
+            }
+
+            System.out.printf("%-30s %dx%d -> %dx%d\n", name, left.width, left.height, scaledLeft.width, scaledLeft.height);
+
+            rectify(scaledLeft, scaledRight, scaledCalibration, rectLeft, rectRight);
 
             denseDisparitySubpixel(rectLeft, rectRight, regionSize, disparityMin, disparityRange,
                     disparity);
@@ -116,8 +144,8 @@ public class StereoDisparityApp {
         config.disparityRange = disparityRange;
         config.subpixel = true;
         config.regionRadiusX = config.regionRadiusY = regionSize;
-        config.maxPerPixelError = 35;
-        config.validateRtoL = 1;
+//        config.maxPerPixelError = 35;
+//        config.validateRtoL = 1;
         config.texture = 0.2;
         StereoDisparity<GrayU8, GrayF32> disparityAlg =
                 FactoryStereoDisparity.blockMatchBest5(config, GrayU8.class, GrayF32.class);
