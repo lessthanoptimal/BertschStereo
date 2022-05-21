@@ -1,0 +1,58 @@
+group = 'com.ninox360'
+version = '1.0-SNAPSHOT'
+
+project.ext.boofcv_version = '0.40.1'
+project.ext.junit_version = '5.8.1'
+project.ext.args4j_version = '2.33'
+
+apply plugin: 'java-library'
+
+java {
+    withJavadocJar()
+    withSourcesJar()
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+tasks.withType(JavaCompile).configureEach { options.encoding = "UTF-8" }
+
+repositories {
+    mavenCentral()
+    mavenLocal()
+
+    maven { url = "https://oss.sonatype.org/content/repositories/snapshots/" }
+}
+
+dependencies {
+    api("org.boofcv:boofcv-core:$boofcv_version")
+    api("org.boofcv:boofcv-swing:$boofcv_version")
+    api("args4j:args4j:$args4j_version")
+
+    testImplementation("org.junit.jupiter:junit-jupiter-api:$junit_version")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:$junit_version")
+}
+
+// task for creating the main application jar used to detect and verify alignment of labels
+task StereoDisparityApp(type: Jar) {
+    manifest {
+        attributes 'Implementation-Title': 'Stereo Disparity Jar',
+                'Implementation-Version': project.version,
+                'Main-Class': 'StereoDisparityApp'
+    }
+
+    outputs.upToDateWhen { false }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    archiveFile.set(file('StereoDisparity.jar'))
+
+    from sourceSets.main.output
+
+    dependsOn configurations.runtimeClasspath
+    from { configurations.runtimeClasspath.findAll { it.name.endsWith('jar') }.collect { zipTree(it) } } {
+        exclude 'META-INF/*.RSA', 'META-INF/*.SF', 'META-INF/*.DSA'
+    }
+}
+
+wrapper {
+    distributionType = Wrapper.DistributionType.BIN
+    gradleVersion = '7.3.3'
+}
