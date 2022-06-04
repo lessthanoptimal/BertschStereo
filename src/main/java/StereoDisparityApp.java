@@ -1,12 +1,15 @@
 import boofcv.abst.disparity.ConfigSpeckleFilter;
 import boofcv.abst.disparity.DisparitySmoother;
 import boofcv.abst.disparity.StereoDisparity;
+import boofcv.alg.cloud.PointCloudReader;
 import boofcv.alg.distort.ImageDistort;
 import boofcv.alg.filter.misc.AverageDownSampleOps;
 import boofcv.alg.geo.PerspectiveOps;
 import boofcv.alg.geo.RectifyDistortImageOps;
 import boofcv.alg.geo.RectifyImageOps;
 import boofcv.alg.geo.rectify.RectifyCalibrated;
+import boofcv.alg.mvs.DisparityParameters;
+import boofcv.alg.mvs.MultiViewStereoOps;
 import boofcv.factory.disparity.ConfigDisparityBMBest5;
 import boofcv.factory.disparity.DisparityError;
 import boofcv.factory.disparity.FactoryStereoDisparity;
@@ -14,13 +17,16 @@ import boofcv.gui.image.VisualizeImageData;
 import boofcv.io.UtilIO;
 import boofcv.io.calibration.CalibrationIO;
 import boofcv.io.image.UtilImageIO;
+import boofcv.io.points.PointCloudIO;
 import boofcv.misc.BoofMiscOps;
 import boofcv.struct.border.BorderType;
 import boofcv.struct.calib.StereoParameters;
 import boofcv.struct.image.GrayF32;
 import boofcv.struct.image.GrayU8;
+import georegression.struct.point.Point3D_F64;
 import georegression.struct.se.Se3_F64;
 import org.apache.commons.io.FilenameUtils;
+import org.ddogleg.struct.DogArray;
 import org.ejml.data.DMatrixRMaj;
 import org.ejml.data.FMatrixRMaj;
 import org.ejml.ops.ConvertMatrixData;
@@ -30,6 +36,9 @@ import org.kohsuke.args4j.Option;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -55,13 +64,16 @@ public class StereoDisparityApp {
     public int disparityMin = 0;
     public int disparityRange = 255;
 
+    RectifyCalibrated rectifyAlg = RectifyImageOps.createCalibrated();
+    DisparityParameters dparam = new DisparityParameters();
+
     public void process() {
         var dirOutput = new File(pathOutput);
         if (!dirOutput.exists())
             BoofMiscOps.checkTrue(dirOutput.mkdirs());
 
-        List<String> inputsLeft = UtilIO.listSmart(pathLeft, true, (f)->true);
-        List<String> inputsRight = UtilIO.listSmart(pathRight, true, (f)->true);
+        List<String> inputsLeft = UtilIO.listSmart(pathLeft, true, (f) -> true);
+        List<String> inputsRight = UtilIO.listSmart(pathRight, true, (f) -> true);
 
         if (inputsLeft.size() != inputsRight.size())
             throw new RuntimeException(String.format("Number of left=%d and right=%d images do not match.",
@@ -95,10 +107,10 @@ public class StereoDisparityApp {
 
             scaledCalibration.setTo(calibration);
             if (left.width > maxWidth) {
-                double scale = maxWidth/(double)left.width;
-                scaledLeft.reshape(maxWidth, left.height*maxWidth/left.width);
+                double scale = maxWidth / (double) left.width;
+                scaledLeft.reshape(maxWidth, left.height * maxWidth / left.width);
                 AverageDownSampleOps.down(left, scaledLeft);
-                scaledRight.reshape(maxWidth, right.height*maxWidth/right.width);
+                scaledRight.reshape(maxWidth, right.height * maxWidth / right.width);
                 AverageDownSampleOps.down(right, scaledRight);
                 PerspectiveOps.scaleIntrinsic(scaledCalibration.left, scale);
                 PerspectiveOps.scaleIntrinsic(scaledCalibration.right, scale);
@@ -128,7 +140,17 @@ public class StereoDisparityApp {
 
             UtilImageIO.saveImage(visualized, new File(dirOutput, name + "_visualized.png").getPath());
 
-            // TODO save disparity in machine readable format
+            // Compute point cloud
+            var cloud = new DogArray<>(Point3D_F64::new);
+            MultiViewStereoOps.disparityToCloud(disparity, dparam, null,
+                    (pixX, pixY, x, y, z) -> cloud.grow().setTo(x, y, z));
+
+            // Save cloud as PLY
+            try (var out = new FileOutputStream(new File(dirOutput, "cloud.ply"))) {
+                PointCloudIO.save3D(PointCloudIO.Format.PLY, PointCloudReader.wrapF64(cloud.toList()), false, out);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
@@ -159,14 +181,13 @@ public class StereoDisparityApp {
     /**
      * Rectified the input images using known calibration.
      */
-    public static RectifyCalibrated rectify(GrayU8 origLeft, GrayU8 origRight,
-                                            StereoParameters param,
-                                            GrayU8 rectLeft, GrayU8 rectRight) {
+    public RectifyCalibrated rectify(GrayU8 origLeft, GrayU8 origRight,
+                                     StereoParameters param,
+                                     GrayU8 rectLeft, GrayU8 rectRight) {
         rectLeft.reshapeTo(origLeft);
         rectRight.reshapeTo(origRight);
 
         // Compute rectification
-        RectifyCalibrated rectifyAlg = RectifyImageOps.createCalibrated();
         Se3_F64 leftToRight = param.getRightToLeft().invert(null);
 
         // original camera calibration matrices
@@ -183,6 +204,13 @@ public class StereoDisparityApp {
 
         // Adjust the rectification to make the view area more useful
         RectifyImageOps.allInsideLeft(param.left, rect1, rect2, rectK, null);
+
+        // Save rectification for later use
+        dparam.disparityMin = disparityMin;
+        dparam.disparityRange = disparityRange;
+        dparam.baseline = param.getBaseline();
+        PerspectiveOps.matrixToPinhole(rectK, rectLeft.width, rectRight.height, dparam.pinhole);
+        dparam.rotateToRectified.setTo(rectifyAlg.getRectifiedRotation());
 
         // undistorted and rectify images
         var rect1_F32 = new FMatrixRMaj(3, 3);
