@@ -2,6 +2,7 @@ import boofcv.abst.disparity.ConfigSpeckleFilter;
 import boofcv.abst.disparity.DisparitySmoother;
 import boofcv.abst.disparity.StereoDisparity;
 import boofcv.alg.cloud.PointCloudReader;
+import boofcv.alg.cloud.PointCloudWriter;
 import boofcv.alg.distort.ImageDistort;
 import boofcv.alg.filter.misc.AverageDownSampleOps;
 import boofcv.alg.geo.PerspectiveOps;
@@ -13,6 +14,7 @@ import boofcv.alg.mvs.MultiViewStereoOps;
 import boofcv.factory.disparity.ConfigDisparityBMBest5;
 import boofcv.factory.disparity.DisparityError;
 import boofcv.factory.disparity.FactoryStereoDisparity;
+import boofcv.gui.image.ShowImages;
 import boofcv.gui.image.VisualizeImageData;
 import boofcv.io.UtilIO;
 import boofcv.io.calibration.CalibrationIO;
@@ -23,10 +25,10 @@ import boofcv.struct.border.BorderType;
 import boofcv.struct.calib.StereoParameters;
 import boofcv.struct.image.GrayF32;
 import boofcv.struct.image.GrayU8;
-import georegression.struct.point.Point3D_F64;
+import boofcv.visualize.PointCloudViewer;
+import boofcv.visualize.VisualizeData;
 import georegression.struct.se.Se3_F64;
 import org.apache.commons.io.FilenameUtils;
-import org.ddogleg.struct.DogArray;
 import org.ejml.data.DMatrixRMaj;
 import org.ejml.data.FMatrixRMaj;
 import org.ejml.ops.ConvertMatrixData;
@@ -34,9 +36,10 @@ import org.kohsuke.args4j.CmdLineException;
 import org.kohsuke.args4j.CmdLineParser;
 import org.kohsuke.args4j.Option;
 
+import javax.swing.*;
+import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.List;
@@ -55,10 +58,13 @@ public class StereoDisparityApp {
     public String pathCalibration;
 
     @Option(name = "-o", aliases = {"--Output"}, usage = "Path to output directory")
-    public String pathOutput;
+    public String pathOutput = "stereo_output";
 
     @Option(name = "--MaxWidth", usage = "If an image has a width larger than this it will be scaled")
     public int maxWidth = 640;
+
+    @Option(name = "--Display", usage = "Displays the 3D cloud in a window")
+    public boolean display = false;
 
     public int regionSize = 5;
     public int disparityMin = 0;
@@ -136,20 +142,37 @@ public class StereoDisparityApp {
             smoother.process(rectLeft, disparity, disparityRange);
 
             // Colorize disparity in a way that's easy for a person to understand
-            BufferedImage visualized = VisualizeImageData.disparity(disparity, null, disparityRange, 0);
+            BufferedImage visualizedDisparity = VisualizeImageData.disparity(disparity, null, disparityRange, 0);
 
-            UtilImageIO.saveImage(visualized, new File(dirOutput, name + "_visualized.png").getPath());
+            UtilImageIO.saveImage(visualizedDisparity, new File(dirOutput, name + "_visualized.png").getPath());
 
             // Compute point cloud
-            var cloud = new DogArray<>(Point3D_F64::new);
+            var cloud = new PointCloudWriter.CloudArraysF32();
             MultiViewStereoOps.disparityToCloud(disparity, dparam, null,
-                    (pixX, pixY, x, y, z) -> cloud.grow().setTo(x, y, z));
+                    (pixX, pixY, x, y, z) -> {
+                        int v = rectLeft.get(pixX, pixY);
+                        cloud.add(x, y, z, v << 16 | v << 8 | v);
+                    });
 
             // Save cloud as PLY
             try (var out = new FileOutputStream(new File(dirOutput, "cloud.ply"))) {
-                PointCloudIO.save3D(PointCloudIO.Format.PLY, PointCloudReader.wrapF64(cloud.toList()), false, out);
+                PointCloudIO.save3D(PointCloudIO.Format.PLY, PointCloudReader.wrap((idx, p) -> {
+                    p.rgb = cloud.cloudRgb.get(idx);
+                    p.x = cloud.cloudXyz.data[idx * 3];
+                    p.y = cloud.cloudXyz.data[idx * 3 + 1];
+                    p.z = cloud.cloudXyz.data[idx * 3 + 2];
+                }, cloud.cloudRgb.size), false, out);
             } catch (IOException e) {
                 throw new RuntimeException(e);
+            }
+
+            if (display) {
+                PointCloudViewer guiPointCloud = VisualizeData.createPointCloudViewer();
+                guiPointCloud.setCameraHFov(PerspectiveOps.computeHFov(dparam.pinhole));
+                guiPointCloud.addCloud(cloud::getPoint, cloud.cloudRgb::get, cloud.cloudRgb.size);
+                JComponent component = guiPointCloud.getComponent();
+                component.setPreferredSize(new Dimension(dparam.pinhole.width, dparam.pinhole.height));
+                ShowImages.showWindow(component, "Point Cloud", true);
             }
         }
     }
@@ -261,10 +284,6 @@ public class StereoDisparityApp {
             }
             if (generator.pathCalibration == null) {
                 System.err.println("You must specify calibration file");
-                System.exit(1);
-            }
-            if (generator.pathOutput == null) {
-                System.err.println("You must specify output directory");
                 System.exit(1);
             }
             try {
