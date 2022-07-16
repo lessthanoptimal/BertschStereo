@@ -11,9 +11,8 @@ import boofcv.alg.geo.RectifyImageOps;
 import boofcv.alg.geo.rectify.DisparityParameters;
 import boofcv.alg.geo.rectify.RectifyCalibrated;
 import boofcv.alg.mvs.MultiViewStereoOps;
-import boofcv.factory.disparity.ConfigDisparityBMBest5;
-import boofcv.factory.disparity.DisparityError;
-import boofcv.factory.disparity.FactoryStereoDisparity;
+import boofcv.factory.disparity.*;
+import boofcv.factory.transform.census.CensusVariants;
 import boofcv.gui.image.ShowImages;
 import boofcv.gui.image.VisualizeImageData;
 import boofcv.io.UtilIO;
@@ -66,8 +65,16 @@ public class StereoDisparityApp {
     @Option(name = "--Display", usage = "Displays the 3D cloud in a window")
     public boolean display = false;
 
-    public int regionSize = 5;
-    public int disparityMin = 0;
+    @Option(name = "--SGM", usage = "Compute disparity using SGM")
+    public boolean useSgm = false;
+
+    @Option(name = "--DisparityMin", usage = "Minimum disparity value it will consider")
+    public int disparityMin = 5;
+
+    @Option(name = "--RegionSize", usage = "Size of blocks it matches when finding disparity")
+    public int regionSize = 10;
+
+    // Maximum disparity it will consider. Can't go beyond 255
     public int disparityRange = 255;
 
     RectifyCalibrated rectifyAlg = RectifyImageOps.createCalibrated();
@@ -129,13 +136,20 @@ public class StereoDisparityApp {
 
             rectify(scaledLeft, scaledRight, scaledCalibration, rectLeft, rectRight);
 
-            denseDisparitySubpixel(rectLeft, rectRight, regionSize, disparityMin, disparityRange,
-                    disparity);
+            if (useSgm) {
+                denseDisparitySgmSubpixel(rectLeft, rectRight, regionSize, disparityMin, disparityRange,
+                        disparity);
+            } else {
+                denseDisparitySubpixel(rectLeft, rectRight, regionSize, disparityMin, disparityRange,
+                        disparity);
+            }
 
             // Here's what we came here for. Time to remove the speckle
             var configSpeckle = new ConfigSpeckleFilter();
-            configSpeckle.similarTol = 1.0f; // Two pixels are connected if their disparity is this similar
-            configSpeckle.maximumArea.setFixed(200); // probably the most important parameter, speckle size
+            // Two pixels are connected if their disparity is this similar
+            configSpeckle.similarTol = 2.0f;
+            // probably the most important parameter, speckle size
+            configSpeckle.maximumArea.setRelative(0.0001, 20);
             DisparitySmoother<GrayU8, GrayF32> smoother =
                     FactoryStereoDisparity.removeSpeckle(configSpeckle, GrayF32.class);
 
@@ -194,6 +208,29 @@ public class StereoDisparityApp {
         config.texture = 0.2;
         StereoDisparity<GrayU8, GrayF32> disparityAlg =
                 FactoryStereoDisparity.blockMatchBest5(config, GrayU8.class, GrayF32.class);
+
+        // process and return the results
+        disparityAlg.process(rectLeft, rectRight);
+
+        disparity.setTo(disparityAlg.getDisparity());
+    }
+
+    public static void denseDisparitySgmSubpixel(GrayU8 rectLeft, GrayU8 rectRight,
+                                                 int regionSize,
+                                                 int disparityMin, int disparityRange,
+                                                 GrayF32 disparity) {
+
+        var config = new ConfigDisparitySGM();
+        config.errorType = DisparitySgmError.CENSUS;
+        config.configCensus.variant = CensusVariants.BLOCK_5_5;
+        config.disparityMin = disparityMin;
+        config.disparityRange = disparityRange;
+        config.subpixel = true;
+        config.paths = ConfigDisparitySGM.Paths.P8;
+        config.configBlockMatch.radiusX = config.configBlockMatch.radiusY = regionSize;
+        config.texture = 0.1;
+        StereoDisparity<GrayU8, GrayF32> disparityAlg =
+                FactoryStereoDisparity.sgm(config, GrayU8.class, GrayF32.class);
 
         // process and return the results
         disparityAlg.process(rectLeft, rectRight);
