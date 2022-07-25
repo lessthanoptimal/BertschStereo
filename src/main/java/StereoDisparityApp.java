@@ -10,6 +10,8 @@ import boofcv.alg.geo.RectifyDistortImageOps;
 import boofcv.alg.geo.RectifyImageOps;
 import boofcv.alg.geo.rectify.DisparityParameters;
 import boofcv.alg.geo.rectify.RectifyCalibrated;
+import boofcv.alg.meshing.DisparityToMeshGridSample;
+import boofcv.alg.meshing.VertexMesh;
 import boofcv.alg.mvs.MultiViewStereoOps;
 import boofcv.factory.disparity.*;
 import boofcv.factory.transform.census.CensusVariants;
@@ -26,8 +28,11 @@ import boofcv.struct.image.GrayF32;
 import boofcv.struct.image.GrayU8;
 import boofcv.visualize.PointCloudViewer;
 import boofcv.visualize.VisualizeData;
+import georegression.struct.point.Point2D_F64;
 import georegression.struct.se.Se3_F64;
 import org.apache.commons.io.FilenameUtils;
+import org.ddogleg.struct.DogArray;
+import org.ddogleg.struct.DogArray_I32;
 import org.ejml.data.DMatrixRMaj;
 import org.ejml.data.FMatrixRMaj;
 import org.ejml.ops.ConvertMatrixData;
@@ -168,17 +173,10 @@ public class StereoDisparityApp {
                         cloud.add(x, y, z, v << 16 | v << 8 | v);
                     });
 
-            // Save cloud as PLY
-            try (var out = new FileOutputStream(new File(dirOutput, "cloud.ply"))) {
-                PointCloudIO.save3D(PointCloudIO.Format.PLY, PointCloudReader.wrap((idx, p) -> {
-                    p.rgb = cloud.cloudRgb.get(idx);
-                    p.x = cloud.cloudXyz.data[idx * 3];
-                    p.y = cloud.cloudXyz.data[idx * 3 + 1];
-                    p.z = cloud.cloudXyz.data[idx * 3 + 2];
-                }, cloud.cloudRgb.size), false, out);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+            savePointCloud(dirOutput, cloud);
+
+            // Convert the disparity image into a polygon mesh
+            saveMesh(dirOutput, rectLeft, disparity);
 
             if (display) {
                 PointCloudViewer guiPointCloud = VisualizeData.createPointCloudViewer();
@@ -188,6 +186,45 @@ public class StereoDisparityApp {
                 component.setPreferredSize(new Dimension(dparam.pinhole.width, dparam.pinhole.height));
                 ShowImages.showWindow(component, "Point Cloud", true);
             }
+        }
+    }
+
+    private void savePointCloud(File dirOutput, PointCloudWriter.CloudArraysF32 cloud) {
+        System.out.println("Saving point cloud");
+        // Save cloud as PLY
+        try (var out = new FileOutputStream(new File(dirOutput, "cloud.ply"))) {
+            PointCloudIO.save3D(PointCloudIO.Format.PLY, PointCloudReader.wrap((idx, p) -> {
+                p.rgb = cloud.cloudRgb.get(idx);
+                p.x = cloud.cloudXyz.data[idx * 3];
+                p.y = cloud.cloudXyz.data[idx * 3 + 1];
+                p.z = cloud.cloudXyz.data[idx * 3 + 2];
+            }, cloud.cloudRgb.size), false, out);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void saveMesh(File dirOutput, GrayU8 rectLeft, GrayF32 disparity) {
+        var alg = new DisparityToMeshGridSample();
+        alg.maxDisparityJump = 2;
+        alg.samplePeriod.setFixed(2);
+        alg.process(dparam, disparity);
+        VertexMesh mesh = alg.getMesh();
+
+        // Specify the color of each vertex
+        var colors = new DogArray_I32(mesh.vertexes.size());
+        DogArray<Point2D_F64> pixels = alg.getVertexPixels();
+        for (int i = 0; i < pixels.size; i++) {
+            Point2D_F64 p = pixels.get(i);
+            int v = rectLeft.get((int) p.x, (int) p.y);
+            colors.add(v << 16 | v << 8 | v);
+        }
+
+        System.out.println("Saving mesh");
+        try (var out = new FileOutputStream(new File(dirOutput, "mesh.ply"))) {
+            PointCloudIO.save3D(PointCloudIO.Format.PLY, mesh, colors, out);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
         }
     }
 
