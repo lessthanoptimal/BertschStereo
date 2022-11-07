@@ -1,7 +1,7 @@
 group = 'com.ninox360'
 version = '1.0-SNAPSHOT'
 
-project.ext.boofcv_version = '0.41-SNAPSHOT'
+project.ext.boofcv_version = '0.41'
 project.ext.junit_version = '5.8.1'
 project.ext.args4j_version = '2.33'
 

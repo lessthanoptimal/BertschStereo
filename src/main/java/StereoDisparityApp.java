@@ -10,7 +10,7 @@ import boofcv.alg.geo.RectifyDistortImageOps;
 import boofcv.alg.geo.RectifyImageOps;
 import boofcv.alg.geo.rectify.DisparityParameters;
 import boofcv.alg.geo.rectify.RectifyCalibrated;
-import boofcv.alg.meshing.DisparityToMeshGridSample;
+import boofcv.alg.meshing.DepthImageToMeshGridSample;
 import boofcv.alg.meshing.VertexMesh;
 import boofcv.alg.mvs.MultiViewStereoOps;
 import boofcv.factory.disparity.*;
@@ -205,10 +205,9 @@ public class StereoDisparityApp {
     }
 
     private void saveMesh(File dirOutput, GrayU8 rectLeft, GrayF32 disparity) {
-        var alg = new DisparityToMeshGridSample();
-        alg.maxDisparityJump = 2;
+        var alg = new DepthImageToMeshGridSample();
         alg.samplePeriod.setFixed(2);
-        alg.process(dparam, disparity);
+        alg.processDisparity(dparam, disparity, 2.0f);
         VertexMesh mesh = alg.getMesh();
 
         // Specify the color of each vertex
