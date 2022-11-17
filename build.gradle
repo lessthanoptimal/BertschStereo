@@ -56,6 +56,26 @@ task StereoDisparityApp(type: Jar) {
     }
 }
 
+task TrinocularDisparityApp(type: Jar) {
+    manifest {
+        attributes 'Implementation-Title': 'Trinocular Disparity Jar',
+                'Implementation-Version': project.version,
+                'Main-Class': 'TrinocularDisparityApp'
+    }
+
+    outputs.upToDateWhen { false }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    archiveFile.set(file('TrinocularDisparity.jar'))
+
+    from sourceSets.main.output
+
+    dependsOn configurations.runtimeClasspath
+    from { configurations.runtimeClasspath.findAll { it.name.endsWith('jar') }.collect { zipTree(it) } } {
+        exclude 'META-INF/*.RSA', 'META-INF/*.SF', 'META-INF/*.DSA'
+    }
+}
+
 wrapper {
     distributionType = Wrapper.DistributionType.BIN
     gradleVersion = '7.3.3'
