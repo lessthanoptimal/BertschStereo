@@ -89,13 +89,18 @@ public class TrinocularDisparityApp {
         List<String> filesRight = UtilIO.listSmartImages(String.format("glob:%s/%s", pathInput, globRight), true);
         List<String> filesMiddle = UtilIO.listSmartImages(String.format("glob:%s/%s", pathInput, globMiddle), true);
 
-        BoofMiscOps.checkEq(filesLeft.size(), filesRight.size());
-        BoofMiscOps.checkEq(filesMiddle.size(), filesMiddle.size());
+        BoofMiscOps.checkEq(filesLeft.size(), filesRight.size(), "left + right images miss match");
+        BoofMiscOps.checkEq(filesLeft.size(), filesMiddle.size(), "left + middle images miss match\"");
+
+        if (filesLeft.isEmpty()) {
+            System.err.println("No images found. path=" + pathInput);
+            System.exit(1);
+        }
 
         int numFrames = filesLeft.size();
 
         for (int frameIdx = 0; frameIdx < numFrames; frameIdx++) {
-            System.out.println("frame "+frameIdx + " / "+numFrames);
+            System.out.println("frame " + frameIdx + " / " + numFrames);
             // Load images. For simplicity, left=0, middle=1, right=2
             GrayF32 image0 = requireNonNull(loadImage(filesLeft.get(frameIdx), GrayF32.class));
             GrayF32 image1 = requireNonNull(loadImage(filesMiddle.get(frameIdx), GrayF32.class));
