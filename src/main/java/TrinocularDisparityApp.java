@@ -54,14 +54,14 @@ public class TrinocularDisparityApp {
     @Option(name = "-o", aliases = {"--Output"}, usage = "Path to output directory")
     public String pathOutput = "trinocular_output";
 
-    @Option(name = "--Left", usage = "Glob pattern for left images inside root data directory")
-    public String globLeft = "left*";
+    @Option(name = "--Left", usage = "Smart path to left camera image. Relative to Input. See help below.")
+    public String globLeft = "glob:left*";
 
-    @Option(name = "--Right", usage = "Glob pattern for right images inside root data directory")
-    public String globRight = "right*";
+    @Option(name = "--Right", usage = "Smart path to right camera image. Relative to Input. See help below.")
+    public String globRight = "glob:right*";
 
-    @Option(name = "--Middle", usage = "Glob pattern for middle images inside root data directory")
-    public String globMiddle = "middle*";
+    @Option(name = "--Middle", usage = "Smart path to middle camera image. Relative to Input. See help below.")
+    public String globMiddle = "glob:middle*";
 
     @Option(name = "--MaxPixel", usage = "Scales input image so that the total number of pixels match this")
     public int maxPixels = 1024 * 768;
@@ -85,9 +85,9 @@ public class TrinocularDisparityApp {
         MultiCameraCalibParams calibration = CalibrationIO.load(pathCalibration);
         MultiCameraCalibParams calibrationScaled = scaleCalibration(calibration);
 
-        List<String> filesLeft = UtilIO.listSmartImages(String.format("glob:%s/%s", pathInput, globLeft), true);
-        List<String> filesRight = UtilIO.listSmartImages(String.format("glob:%s/%s", pathInput, globRight), true);
-        List<String> filesMiddle = UtilIO.listSmartImages(String.format("glob:%s/%s", pathInput, globMiddle), true);
+        List<String> filesLeft = lookUpFiles(globLeft);
+        List<String> filesRight = lookUpFiles(globRight);
+        List<String> filesMiddle = lookUpFiles(globMiddle);
 
         BoofMiscOps.checkEq(filesLeft.size(), filesRight.size(), "left + right images miss match");
         BoofMiscOps.checkEq(filesLeft.size(), filesMiddle.size(), "left + middle images miss match\"");
@@ -121,6 +121,26 @@ public class TrinocularDisparityApp {
             computeStereo(frameIdx, 0, 2, calibrationScaled, scale0, scale1, scale2);
             computeStereo(frameIdx, 1, 2, calibrationScaled, scale0, scale1, scale2);
         }
+    }
+
+    private List<String> lookUpFiles(String smartPath) {
+        if (smartPath.startsWith("glob:")) {
+            smartPath = "glob:" + pathInput + smartPath.substring(5);
+        } else if (smartPath.startsWith("regex:")) {
+            smartPath = "regex:" + pathInput + smartPath.substring(6);
+        } else {
+            smartPath = new File(pathInput, smartPath).getPath();
+        }
+
+        // Work around for windows issue. Might mess up a REGEX path
+        String windowsPath = smartPath.replace("\\", "/");
+
+        List<String> found = UtilIO.listSmartImages(windowsPath, true);
+        if (found.isEmpty()) {
+            System.err.println("No images found. Check path: " + windowsPath);
+            System.exit(1);
+        }
+        return found;
     }
 
     private void computeStereo(int frameID, int camA, int camB, MultiCameraCalibParams calibration, GrayF32... images) {
@@ -296,8 +316,9 @@ public class TrinocularDisparityApp {
         System.out.println("Computes stereo disparity for one or more stereo image pairs.");
         System.out.println();
         System.out.println("Image paths can point to a file, directory, glob, or regex. Examples:");
-        System.out.println("   Glob example: 'glob:data/**/left*.jpg'");
-        System.out.println("   Regex example: 'regex:data/\\w+/left\\d+.jpg'");
+        System.out.println("   Directory example: 'data/left'");
+        System.out.println("   Glob example:      'glob:data/**/left*.jpg'");
+        System.out.println("   Regex example:     'regex:data/\\w+/left\\d+.jpg'");
         System.out.println();
         System.out.println("Calibration needs to be a BoofCV formatted yaml file for stereo cameras");
     }
